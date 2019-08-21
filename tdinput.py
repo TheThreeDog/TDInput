@@ -77,7 +77,9 @@ import tty, termios
 import time   
 from enum import Enum,unique
 
-
+# 以下获取字宽的代码直接从开源项目urwid中摘录使用
+# 项目代码：https://github.com/urwid/urwid/blob/master/urwid/old_str_util.py
+# 知识资料参考：https://www.jb51.net/article/86577.htm#comments
 widths = [
     (126,  1), (159,  0), (687,   1), (710,  0), (711,  1),
     (727,  0), (733,  1), (879,   0), (1154, 1), (1161, 0),
@@ -106,8 +108,8 @@ def get_width( o ):
 #  输入backspace把最后一个元素移除。
 #  每次有输入要打印
 #  输入回车直接返回。
-#  采用VT10编码控制
-@unique # 不允许出现值相同的变量 
+#  采用VT100编码控制
+@unique # 不允许枚举中出现值相同的变量 
 class CmdType(Enum):
     """
     这个类提供所有可用的按键键值的枚举类型
@@ -124,7 +126,7 @@ class CmdType(Enum):
     # 此枚举中仅记录常用的控制指令，其他字符很可能是输入字符因此不记录在此出以免影响输入
     # 
     """
-    
+
     CMD_CTRL_A      =1
     CMD_CTRL_B      =2
     CMD_CTRL_C      =3
@@ -177,8 +179,6 @@ class CmdType(Enum):
         raise (KeyError)
         
 
-
-
 def getch():
     fd=sys.stdin.fileno() 
     old_settings=termios.tcgetattr(fd) 
@@ -203,12 +203,13 @@ length = 0
 
 def update_position():
     global msg, index, position, length
-    if index == 0:
+    if index <= 0:
         position = 0
     else:
         position = 0
         for ch in msg[0:index]:
             position += get_width(ch)
+        position += 1
 
 
 # 自动刷新装饰器，用于输入的函数，每次敲击字符后立马回显
@@ -254,21 +255,25 @@ def register_func(cmd): # 注册装饰器， 使用方法 @register_func(CmdType
         return register
     return outer
 
-@register_func(CmdType.CMD_UP)
-def up():
-    td_print("按了↑箭头")
-
-@register_func(CmdType.CMD_DOWN)
-def down():
-    td_print("按了↓箭头")
-
 @register_func(CmdType.CMD_LEFT)
 def left():
-    td_print("\033[1D",end="") # 左移光标
+    global index ,position
+    if index <= 0:
+        return None
+    index -= 1
+    width = get_width(msg[index])
+    td_print("\033[{}D".format(width),end="") # 左移一个字符，根据字宽决定
 
 @register_func(CmdType.CMD_RIGHT)
 def right():
-    td_print("\033[1C",end="") # 右移光标
+    global index ,position
+    if index >= (len(msg) - 1):
+        return None 
+    index += 1
+    update_position()
+    td_print("\033[u",end="")  # 恢复光标位置 
+    td_print("\033[{}C".format(position),end="") # 把光标移动到指定位置光标，相当于左移
+    # td_print("\033[1C",end="") # 右移光标
 
 @register_func(CmdType.CMD_CTRL_C)
 def ctrl_c():#这个是ctrl-c  直接返回，效果上则是丢弃了当前行的内容。           
@@ -277,6 +282,8 @@ def ctrl_c():#这个是ctrl-c  直接返回，效果上则是丢弃了当前行�
 
 def td_input():
     td_print("\033[s",end="")  # 保存光标位置
+    global msg,index
+    index = 0
     msg = []
     try:
         while True: 
@@ -340,31 +347,15 @@ def td_input():
 
             else : # 输入内容
                 msg.append(chr(ch))
+                index += 1
                 td_flush(msg)
                 continue
+
         return ""
     except KeyError as e:
         td_print(e)
         td_print("键值错误！尚未给此控制指令注册回调函数，请使用@register_func注册再调用")
     
-if __name__ == '__main__': 
-
-    try:
-        while True:
-            td_print(">>> ",end = '')
-            cmd = td_input().strip() # 获取字符去除前后空格
-            if cmd == '':    # 输入无效内容，直接跳过
-                continue
-            if cmd == 'exit':
-                break
-            # print(cmd)
-
-    except Exception as e:
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-        td_print(exc_type, fname, exc_tb.tb_lineno)
-        #rate.sleep()
-
 
 
 
