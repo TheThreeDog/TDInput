@@ -209,7 +209,10 @@ def update_position():
         position = 0
         for ch in msg[0:index]:
             position += get_width(ch)
-        position += 1
+        # position += 1
+    print("\033[u",end="")  # 恢复光标位置
+    if position != 0:
+        td_print("\033[{}C".format(position),end="") # 右移到指定位置 
 
 
 # 自动刷新装饰器，用于输入的函数，每次敲击字符后立马回显
@@ -229,6 +232,7 @@ def td_flush(msg):
     print("\033[u",end="")  # 恢复光标位置 
     print("\033[K",end="")  # 从光标位置清空到行尾
     print("".join(msg),end="") # 内容回显
+    update_position()       # 重置光标的位置
 
 func_dict = {}
 
@@ -255,7 +259,7 @@ def register_func(cmd): # 注册装饰器， 使用方法 @register_func(CmdType
         return register
     return outer
 
-@register_func(CmdType.CMD_LEFT)
+@register_func(CmdType.CMD_LEFT) # 左键触发，光标左移
 def left():
     global index ,position
     if index <= 0:
@@ -264,21 +268,39 @@ def left():
     width = get_width(msg[index])
     td_print("\033[{}D".format(width),end="") # 左移一个字符，根据字宽决定
 
-@register_func(CmdType.CMD_RIGHT)
+@register_func(CmdType.CMD_RIGHT) # 右键触发， 光标右移
 def right():
     global index ,position
-    if index >= (len(msg) - 1):
+    if index > (len(msg) - 1):
         return None 
+    width = get_width(msg[index])
     index += 1
-    update_position()
-    td_print("\033[u",end="")  # 恢复光标位置 
-    td_print("\033[{}C".format(position),end="") # 把光标移动到指定位置光标，相当于左移
+    td_print("\033[{}C".format(width),end="") # 把光标右移一个字宽
     # td_print("\033[1C",end="") # 右移光标
 
 @register_func(CmdType.CMD_CTRL_C)
 def ctrl_c():#这个是ctrl-c  直接返回，效果上则是丢弃了当前行的内容。           
     td_print("^C")
     return ""
+
+@register_func(CmdType.CMD_DELETE)
+def delete_func():
+    global msg,index
+    if index >= len(msg):
+        return None
+    if 0 != len(msg):
+        msg.pop(index)
+    td_flush(msg)
+
+@register_func(CmdType.CMD_BACKSPACE)
+def backspace_func():
+    global msg,index
+    if index <= 0:
+        return None
+    if 0 != len(msg):
+        msg.pop(index-1)
+        index -= 1
+    td_flush(msg)
 
 def td_input():
     td_print("\033[s",end="")  # 保存光标位置
@@ -339,14 +361,16 @@ def td_input():
                 func_dict[CmdType.getItem(ch)]()
                 continue
 
-            elif ch == 127: # 删除最后一个字符
-                if 0 != len(msg):
-                    msg.pop()
-                td_flush(msg)
+            elif ch == 127: # 删除光标前的字符
+                func_dict[CmdType.CMD_BACKSPACE]()
+                # if 0 != len(msg):
+                #     msg.pop(index-1)
+                # td_flush(msg)
                 continue 
 
             else : # 输入内容
-                msg.append(chr(ch))
+                msg.insert(index,chr(ch))
+                # msg.append(chr(ch))
                 index += 1
                 td_flush(msg)
                 continue
