@@ -1,85 +1,30 @@
-# import pygame
-
-# def main():
-#     pygame.init()
-#     while True:
-#         for event in pygame.event.get():
-#             if event.type == pygame.QUIT:
-#                 sys.exit()
-#             elif event.type == pygame.KEYDOWN: #键被按下
-#                 if event.key == pygame.K_LEFT:
-#                     print("LEFT")
-#                 elif event.key == pygame.K_RIGHT:
-#                     print("RIGHT")
-#                 elif event.key == pygame.K_UP:
-#                     print("UP")
-#                 elif event.key == pygame.K_DOWN:
-#                     print("DOWN")
-#             elif event.type == pygame.KEYUP:
-#                 pass
-
-# if __name__ == '__main__':
-#     main()
-
-
-
-
-
-
-
-
-# import sys, os
-# from pynput.keyboard import Controller,Key,Listener
- 
-# # 监听按压
-# def on_press(key):
-#     try:
-#         print("正在按压:",format(key.char))
-#     except AttributeError:
-#         print("正在按压:",format(key))
- 
-# # 监听释放
-# def on_release(key):
-#     print("已经释放:",format(key))
- 
-#     if key==Key.esc:
-#         # 停止监听
-#         return False
- 
-# # 开始监听
-# def start_listen():
-#     with Listener(on_press=on_press,on_release=on_release) as listener:
-#         listener.join()
- 
-# if __name__ == '__main__':
- 
-#     # 实例化键盘
-#     kb=Controller()
- 
-#     # 使用键盘输入一个字母
-#     kb.press('a')
-#     kb.release('a')
- 
-#     # 使用键盘输入字符串,注意当前键盘调成英文
-#     kb.type("hello world")
- 
-#     # 使用Key.xxx输入
-#     kb.press(Key.space)
- 
-#     # 开始监听,按esc退出监听
-#     start_listen()
-
-
-
 import os  
 import sys 
 import tty, termios 
 import time   
 from enum import Enum,unique
 
+"""
+输入控制，三级狗自研输入引擎，所有的输入前都由此td_print控制，手动实现上下左右按键触发，指令触发和输入回显的逻辑！
+- 保证输入模块的使用和input()函数没有区别！
+- 重写输入模块： 遇到控制指令，直接处理，非控制指令，存入列表中。
+- 按下backspace把光标前的元素删除，按下delete把光标后一个元素删除。
+- 每次有输入直接打印更新到屏幕上
+- 手动实现 ↑ ↓ ← → home end delete update的逻辑
+- 输入回车直接返回。
+- 采用VT100编码控制
+- 不能在线程中并发启动，会影响正常的输入。
+"""
+
+msg = []                                # 一个列表存储正在输入的数据
+index = 0                               # index
+position = 0                            # 位置和下标不一样，下标代表正在操作的是第几个字符，位置代表在在终端中显示的位置。
+func_dict = {}                          # 记录所有的回调函数
+
 # 以下获取字宽的代码直接从开源项目urwid中摘录使用
 # 项目代码：https://github.com/urwid/urwid/blob/master/urwid/old_str_util.py
 # 知识资料参考：https://www.jb51.net/article/86577.htm#comments
+
 widths = [
     (126,  1), (159,  0), (687,   1), (710,  0), (711,  1),
     (727,  0), (733,  1), (879,   0), (1154, 1), (1161, 0),
@@ -102,13 +47,6 @@ def get_width( o ):
             return wid
     return 1
 
-
-#  保证输入模块的使用和input()函数没有区别！
-#  重写输入模块： 遇到控制指令，直接处理，非控制指令，存入列表中。
-#  输入backspace把最后一个元素移除。
-#  每次有输入要打印
-#  输入回车直接返回。
-#  采用VT100编码控制
 @unique # 不允许枚举中出现值相同的变量 
 class CmdType(Enum):
     """
@@ -178,8 +116,7 @@ class CmdType(Enum):
                 return member
         raise (KeyError)
         
-
-def getch():
+def getch():                            # 修改输入模式，直接从终端点击获取收入
     fd=sys.stdin.fileno() 
     old_settings=termios.tcgetattr(fd) 
     #old_settings[3]= old_settings[3] & ~termios.ICANON & ~termios.ECHO  
@@ -190,19 +127,8 @@ def getch():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)  
     return ord(ch)
 
-
-"""
-输入控制类，三级狗自研输入引擎，所有的输入前都由此控制，手动实现上下左右按键触发，指令触发和输入回显的逻辑！
-"""
-# 需求： 需要一个列表存储正在输入的数据
-# 有一个下标记录当前光标的位置
-msg = []
-index = 0
-position = 0 # 位置和下标不一样，下标代表正在操作的是第几个字符，位置代表在在终端中显示的位置。
-length = 0
-
-def update_position():
-    global msg, index, position, length
+def update_position():                  # 根据index更新position的位置
+    global msg, index, position
     if index <= 0:
         position = 0
     else:
@@ -210,45 +136,27 @@ def update_position():
         for ch in msg[0:index]:
             position += get_width(ch)
         # position += 1
-    print("\033[u",end="")  # 恢复光标位置
+    td_print("\033[u",end="")  # 恢复光标位置
     if position != 0:
         td_print("\033[{}C".format(position),end="") # 右移到指定位置 
 
-
-# 自动刷新装饰器，用于输入的函数，每次敲击字符后立马回显
-def auto_flush(func):
+def auto_flush(func):                   # 自动刷新装饰器，用于输入的函数，每次敲击字符后立马回显
     def inner(*args,**kwargs):
         f = func(*args,**kwargs)
         sys.stdout.flush()
         return f
     return inner
     
-@auto_flush
-def td_print(*msgs,end="\n"):
-    print(*msgs,end=end)
-
-@auto_flush
-def td_flush(msg):
-    print("\033[u",end="")  # 恢复光标位置 
-    print("\033[K",end="")  # 从光标位置清空到行尾
-    print("".join(msg),end="") # 内容回显
-    update_position()       # 重置光标的位置
-
-func_dict = {}
-
-def default_handler():
+def default_handler():                  # 默认的处理方式：不处理
     '''
     默认的处理方式：不处理
     '''
     pass
 
-def init_func_dict():
-    for member in CmdType.__members__.values():
-        func_dict[member] = default_handler
-
-init_func_dict()
-
-def register_func(cmd): # 注册装饰器， 使用方法 @register_func(CmdType.CMD_XX_XX)
+def register_func(cmd):                 # 注册装饰器， 使用方法 @register_func(CmdType.CMD_XX_XX)
+    if len(func_dict) == 0:
+        for member in CmdType.__members__.values():
+            func_dict[member] = default_handler
     def outer(func):
         if cmd not in CmdType:
             td_print("注册类型错误！CmdType中不包含此类型，请在类中添加")
@@ -259,7 +167,7 @@ def register_func(cmd): # 注册装饰器， 使用方法 @register_func(CmdType
         return register
     return outer
 
-@register_func(CmdType.CMD_LEFT) # 左键触发，光标左移
+@register_func(CmdType.CMD_LEFT)        # 键盘←键触发，光标左移
 def left():
     global index ,position
     if index <= 0:
@@ -268,7 +176,7 @@ def left():
     width = get_width(msg[index])
     td_print("\033[{}D".format(width),end="") # 左移一个字符，根据字宽决定
 
-@register_func(CmdType.CMD_RIGHT) # 右键触发， 光标右移
+@register_func(CmdType.CMD_RIGHT)       # 键盘→键触发， 光标右移
 def right():
     global index ,position
     if index > (len(msg) - 1):
@@ -278,12 +186,12 @@ def right():
     td_print("\033[{}C".format(width),end="") # 把光标右移一个字宽
     # td_print("\033[1C",end="") # 右移光标
 
-@register_func(CmdType.CMD_CTRL_C)
-def ctrl_c():#这个是ctrl-c  直接返回，效果上则是丢弃了当前行的内容。           
+@register_func(CmdType.CMD_CTRL_C)      # 注册ctrl-c  直接返回，效果上则是丢弃了当前行的内容。
+def ctrl_c():
     td_print("^C")
     return ""
 
-@register_func(CmdType.CMD_DELETE)
+@register_func(CmdType.CMD_DELETE)      # 注册delete按键删除
 def delete_func():
     global msg,index
     if index >= len(msg):
@@ -292,7 +200,7 @@ def delete_func():
         msg.pop(index)
     td_flush(msg)
 
-@register_func(CmdType.CMD_BACKSPACE)
+@register_func(CmdType.CMD_BACKSPACE)   # 注册backspace按键删除
 def backspace_func():
     global msg,index
     if index <= 0:
@@ -301,6 +209,29 @@ def backspace_func():
         msg.pop(index-1)
         index -= 1
     td_flush(msg)
+
+@register_func(CmdType.CMD_HOME)        # 注册home按键处理函数
+def home_func():
+    global index 
+    index = 0
+    update_position()
+
+@register_func(CmdType.CMD_END)         # 注册end按键处理函数
+def end_func():
+    global index 
+    index = len(msg) 
+    update_position()
+
+@auto_flush
+def td_print(*msgs,end="\n"):
+    print(*msgs,end=end)
+
+@auto_flush
+def td_flush(msg):
+    print("\033[u",end="")  # 恢复光标位置 
+    print("\033[K",end="")  # 从光标位置清空到行尾
+    print("".join(msg),end="") # 内容回显
+    update_position()       # 重置光标的位置
 
 def td_input():
     td_print("\033[s",end="")  # 保存光标位置
@@ -363,55 +294,17 @@ def td_input():
 
             elif ch == 127: # 删除光标前的字符
                 func_dict[CmdType.CMD_BACKSPACE]()
-                # if 0 != len(msg):
-                #     msg.pop(index-1)
-                # td_flush(msg)
                 continue 
 
             else : # 输入内容
                 msg.insert(index,chr(ch))
-                # msg.append(chr(ch))
                 index += 1
                 td_flush(msg)
                 continue
-
+                
         return ""
+
     except KeyError as e:
         td_print(e)
         td_print("键值错误！尚未给此控制指令注册回调函数，请使用@register_func注册再调用")
     
-
-
-
-
-######################################################################3
-# def td_input():
-#     td_print("\033[s",end="")  # 保存光标位置
-#     msg = []
-#     while True: 
-#         ch = getch()
-#         # print(ch)
-#         # print(type(ch))
-#         if ch== 3 : 
-#             #这个是ctrl-c 
-#             td_print()
-#             return ""
-#         if ch == 13: # 回车
-#             td_print()
-#             return "".join(msg)
-#         if ch == 127: # 删除最后一个字符
-#             if 0 != len(msg):
-#                 msg.pop()
-#             #td_print("\033[u",end="")  # 恢复光标位置 # 清空本行
-#             td_print("\033[2K",end="") # 清空本行
-#             td_print('\033[99999999999999D',end="") # 设置光标位置
-#             td_print(">>> ","".join(msg),end="") # 内容回显
-#             continue
-
-#         if ch != 27: # 输入内容
-#             msg.append(chr(ch))
-#             td_print("\033[2K",end="") # 清空本行
-#             td_print('\033[99999999999999D',end="") # 设置光标位置
-#             td_print(">>> ","".join(msg),end="") # 内容回显
-#             continue
-
