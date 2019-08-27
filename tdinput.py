@@ -309,3 +309,14 @@ def td_input():
         td_print(e)
         td_print("键值错误！尚未给此控制指令注册回调函数，请使用@register_func注册再调用")
     
+def set_msg(m):
+    global msg
+    msg = m
+
+def set_index(i):
+    global index
+    index = i
+
+def has_msg():
+    global msg
+    return True if len(msg) != 0 else False
